@@ -1,0 +1,21 @@
+[Unit]
+Description=Telegram Gift Sniper (surf → unique)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=surfsniper
+WorkingDirectory=/opt/surfsniper
+ExecStart=/opt/surfsniper/.venv/bin/python -m src.main
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=surfsniper
+
+# Prevent accidental re-fires after crash: state.json tracks used surfs
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

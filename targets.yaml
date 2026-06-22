@@ -1,0 +1,21 @@
+poll:
+  coarse_sec: 45
+  approach_sec: 3
+  armed_sec: 0.3
+
+firecontrol:
+  safety: 1
+  bracket: false
+
+model:
+  slug_stem: ""          # e.g. "SurfStar" — fill before running
+  example_slug: ""       # e.g. "SurfStar-12" — fill before running
+
+targets:
+  - num: 444
+    ammo_index: 0
+  - num: 666
+    ammo_index: 1
+
+runtime:
+  dry_run: true          # set to false only after M1-M4 pass

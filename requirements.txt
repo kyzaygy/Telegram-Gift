@@ -1,0 +1,4 @@
+telethon==1.36.0
+pydantic-settings==2.4.0
+pyyaml==6.0.1
+structlog==24.4.0
