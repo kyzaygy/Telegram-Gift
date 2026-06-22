@@ -33,6 +33,7 @@ class SniperState(enum.Enum):
     ARMED = "ARMED"
     FIRED = "FIRED"
     DONE = "DONE"
+    ABORTED = "ABORTED"    # target num already passed — never fire
 
 
 @dataclass
@@ -48,6 +49,9 @@ class FireDecision:
 _FORM_EXPIRY_SEC = 45.0  # refresh payment form before it expires
 
 
+_TERMINAL = (SniperState.FIRED, SniperState.DONE, SniperState.ABORTED)
+
+
 class FireController:
     def __init__(
         self,
@@ -55,11 +59,13 @@ class FireController:
         poll: PollConfig,
         fc_cfg: FirecontrolConfig,
         rtt: float,
+        bracket_shift: int = 0,
     ) -> None:
         self._target = target
         self._poll = poll
         self._fc = fc_cfg
         self._rtt = rtt
+        self._bracket_shift = bracket_shift
         self._state = SniperState.IDLE
         self._form: Optional[Any] = None
         self._form_fetched_at: float = 0.0
@@ -84,14 +90,21 @@ class FireController:
         Called on every monitor tick.
         """
         target = self._target.num
+
+        # ABORT: target num is already past — can never reach it.
+        if issued > target and self._state not in _TERMINAL:
+            self._transition(SniperState.ABORTED)
+            log.warning("target_past_abort", target=target, issued=issued)
+
         distance = target - issued
 
-        # lead = how many more mints we expect while our request is in flight
+        # lead = expected additional mints while our RPC is in flight
+        # bracket_shift moves the threshold forward by 1 for the second surf
         lead = math.ceil(rate * self._rtt) + self._fc.safety
-        fire_threshold = target - 1 - lead
+        fire_threshold = target - 1 - lead + self._bracket_shift
 
         # FSM distance-based transitions (terminal states are sticky)
-        if self._state not in (SniperState.FIRED, SniperState.DONE):
+        if self._state not in _TERMINAL:
             if self._state == SniperState.IDLE:
                 self._transition(SniperState.COARSE)
 
@@ -117,6 +130,7 @@ class FireController:
             rate=f"{rate:.5f}",
             lead=lead,
             fire_threshold=fire_threshold,
+            bracket_shift=self._bracket_shift,
             should_fire=should_fire,
             state=self._state.value,
         )
@@ -129,6 +143,9 @@ class FireController:
             fire_threshold=fire_threshold,
             state=self._state,
         )
+
+    def is_aborted(self) -> bool:
+        return self._state == SniperState.ABORTED
 
     def needs_form_refresh(self) -> bool:
         """True when we're in approach/armed and the form is missing or stale."""

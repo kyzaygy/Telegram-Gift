@@ -18,6 +18,12 @@ class EnvSettings(BaseSettings):
     tg_api_hash: str
     tg_session: str = "surfsniper"
 
+    # Web dashboard
+    web_token: str = ""
+    web_host: str = "127.0.0.1"
+    web_port: int = 8080
+    web_force_fire: bool = False  # show FORCE FIRE button only when true
+
 
 @dataclass
 class PollConfig:

@@ -269,6 +269,63 @@ def parse_num_from_updates(updates: Any) -> Optional[int]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Account helpers
+# ---------------------------------------------------------------------------
+
+async def get_star_balance(client: TelegramClient) -> Optional[int]:
+    """
+    Return the account's Telegram Star balance.
+    Uses payments.getStarsStatus — may not exist in older layers; returns None on error.
+    """
+    try:
+        me = await client.get_me()
+        peer = await client.get_input_entity(me)
+        result = await client(functions.payments.GetStarsStatusRequest(peer=peer))
+        return getattr(result, "balance", None)
+    except Exception:
+        return None
+
+
+async def check_upgrade_open(
+    client: TelegramClient,
+    gift_id: int,
+    surf_msg_id: int,
+) -> bool:
+    """
+    Return True if the upgrade for this gift model is currently available.
+
+    Tries two methods in order:
+    1. getStarGiftUpgradePreview(gift_id) — if available in TL layer.
+    2. Fallback: re-read the saved gift and check can_upgrade flag.
+    """
+    # Method 1: preview call
+    try:
+        await client(functions.payments.GetStarGiftUpgradePreviewRequest(gift_id=gift_id))
+        return True
+    except RPCError as e:
+        err = str(e).upper()
+        # Known pre-release errors
+        if any(k in err for k in ("GIFT_UPGRADE", "UNSUPPORTED", "NOT_ALLOWED", "FORBIDDEN")):
+            return False
+        # Unexpected error — fall through to method 2
+    except AttributeError:
+        pass  # method not in this TL layer
+
+    # Method 2: check can_upgrade on the saved gift
+    try:
+        me = await client.get_me()
+        peer = await client.get_input_entity(me)
+        result = await _fetch_saved_gifts(client, peer, "", 100)
+        for saved in result.gifts:
+            if getattr(saved, "msg_id", None) == surf_msg_id:
+                return bool(getattr(saved, "can_upgrade", False))
+    except Exception:
+        pass
+
+    return False
+
+
 async def read_surf_num(client: TelegramClient, msg_id: int) -> Optional[int]:
     """
     Fallback: re-fetch saved gifts and return the num of the now-unique gift
