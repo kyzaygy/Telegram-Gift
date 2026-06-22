@@ -11,7 +11,7 @@ from typing import Optional
 class SurfRecord:
     msg_id: int
     gift_id: int
-    status: str = "idle"          # idle | fired | done
+    status: str = "idle"          # idle | fired | done | aborted
     result_num: Optional[int] = None
     fired_at: Optional[float] = None
 
@@ -60,6 +60,7 @@ class StateManager:
             await self._save()
 
     async def unmark_fired(self, msg_id: int) -> None:
+        """Roll back a fired mark when no RPC was sent (TypeError fallback path)."""
         async with self._lock:
             for surf in self._state.surfs:
                 if surf.msg_id == msg_id and surf.status == "fired":
@@ -68,7 +69,7 @@ class StateManager:
                     break
             await self._save()
 
-    async def mark_done(self, msg_id: int, result_num: int) -> None:
+    async def mark_done(self, msg_id: int, result_num: Optional[int]) -> None:
         async with self._lock:
             for surf in self._state.surfs:
                 if surf.msg_id == msg_id:
@@ -77,10 +78,19 @@ class StateManager:
                     break
             await self._save()
 
+    async def mark_aborted(self, msg_id: int) -> None:
+        """Target number was already issued — surf is saved but cannot reach its target."""
+        async with self._lock:
+            for surf in self._state.surfs:
+                if surf.msg_id == msg_id:
+                    surf.status = "aborted"
+                    break
+            await self._save()
+
     def is_surf_used(self, msg_id: int) -> bool:
         for surf in self._state.surfs:
             if surf.msg_id == msg_id:
-                return surf.status in ("fired", "done")
+                return surf.status in ("fired", "done", "aborted")
         return False
 
     def all_surfs(self) -> list[SurfRecord]:

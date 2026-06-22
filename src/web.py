@@ -1,20 +1,18 @@
 """
-FastAPI web dashboard — runs as an asyncio task inside the main process,
-shares AppSharedState directly with the sniper loops (no IPC).
+FastAPI web dashboard — runs as an asyncio task inside the main process.
 
 Bind: 127.0.0.1:WEB_PORT (expose externally via SSH tunnel or Caddy TLS proxy).
-Auth: all endpoints require  Authorization: Bearer <WEB_TOKEN>.
+Auth: all /api/* endpoints require  Authorization: Bearer <WEB_TOKEN>.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import asdict
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -23,9 +21,6 @@ if TYPE_CHECKING:
 
 _SECURITY = HTTPBearer(auto_error=True)
 
-# ---------------------------------------------------------------------------
-# Embedded HTML — single-page dashboard, mobile-friendly, dark theme
-# ---------------------------------------------------------------------------
 _HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -42,19 +37,15 @@ h1{font-size:17px;color:#58a6ff;margin-bottom:14px;display:flex;align-items:cent
 table{width:100%;border-collapse:collapse}
 th{text-align:left;color:#8b949e;font-weight:normal;padding:3px 6px;font-size:11px}
 td{padding:3px 6px}
-.IDLE,.COARSE{color:#8b949e}
-.APPROACH{color:#f0883e}
-.ARMED{color:#ffa657;font-weight:bold}
-.FIRED{color:#a5d6ff}
-.DONE{color:#56d364;font-weight:bold}
-.ABORTED{color:#ff7b72;opacity:.7}
-.READY{color:#e6edf3}
-.LOCKED{color:#8b949e;text-decoration:line-through}
+.coarse{color:#8b949e}
+.mid{color:#f0883e}
+.tight{color:#ffa657;font-weight:bold}
+.watching{color:#e6edf3}
+.done{color:#56d364;font-weight:bold}
+.aborted{color:#ff7b72;opacity:.7}
 .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:bold}
 .ok{background:#1a4731;color:#56d364}
-.warn{background:#3d2b00;color:#f0883e}
 .off{background:#21262d;color:#8b949e}
-.red{background:#4d0000;color:#ff7b72}
 .btns{display:flex;gap:8px;flex-wrap:wrap}
 button{padding:8px 18px;border:1px solid #30363d;border-radius:6px;background:#21262d;color:#e6edf3;cursor:pointer;font-family:inherit;font-size:13px;transition:.15s}
 button:hover{background:#30363d}
@@ -86,10 +77,6 @@ input[type=password]{background:#0d1117;border:1px solid #30363d;border-radius:6
   <div class="card">
     <h2>Targets</h2>
     <div id="tgt"></div>
-  </div>
-  <div class="card">
-    <h2>Account</h2>
-    <div id="acct"></div>
   </div>
   <div class="card">
     <h2>Controls</h2>
@@ -141,28 +128,22 @@ async function pollLogs(){
 }
 
 function render(d){
-  // Targets table
-  let h='<table><tr><th>Target</th><th>FSM</th><th>Issued</th><th>Dist</th><th>Rate /s</th><th>Lead</th><th>Surf</th><th>Result</th></tr>';
-  for(const s of d.snipers){
-    const res=s.result_num!==null?(s.result_num===s.target?'<span class="hit">#'+s.result_num+' HIT</span>':'<span class="miss">#'+s.result_num+' MISS</span>'):'—';
-    h+=`<tr><td>#${s.target}</td><td class="${s.state}">${s.state}</td><td>${s.issued}</td><td>${s.distance}</td><td>${s.rate.toFixed(3)}</td><td>${s.lead}</td><td class="${s.surf_status}">${s.surf_status}</td><td>${res}</td></tr>`
+  let h='<table><tr><th>Target</th><th>Issue</th><th>Dist</th><th>Zone</th><th>Surf</th><th>Result</th></tr>';
+  for(const t of d.targets){
+    const res=t.result_num!==null
+      ?(t.result_num===t.target?'<span class="hit">#'+t.result_num+' HIT</span>':'<span class="miss">#'+t.result_num+' MISS</span>')
+      :'—';
+    h+=`<tr>
+      <td>#${t.target}</td>
+      <td>${t.issue}</td>
+      <td>${t.distance}</td>
+      <td class="${t.zone}">${t.zone}</td>
+      <td class="${t.surf_status}">${t.surf_status}</td>
+      <td>${res}</td>
+    </tr>`;
   }
   document.getElementById('tgt').innerHTML=h+'</table>';
 
-  // Account
-  const ub=d.upgrade_open?'<span class="badge ok">OPEN</span>':'<span class="badge off">CLOSED</span>';
-  const bal=d.star_balance!==null?d.star_balance+' ★':'—';
-  const lp=d.last_poll_at>0?new Date(d.last_poll_at*1e3).toLocaleTimeString():'—';
-  document.getElementById('acct').innerHTML=`
-<table>
-<tr><th>Session</th><td>${d.session_valid?'<span class="badge ok">valid</span>':'<span class="badge red">INVALID</span>'}</td></tr>
-<tr><th>RTT</th><td>${d.rtt_ms.toFixed(1)} ms</td></tr>
-<tr><th>Stars</th><td>${bal}</td></tr>
-<tr><th>Upgrade</th><td>${ub}</td></tr>
-<tr><th>Last release poll</th><td>${lp}</td></tr>
-</table>`;
-
-  // Armed badge
   const b=document.getElementById('arm-badge');
   if(d.armed){b.className='badge ok';b.textContent='ARMED'}
   else{b.className='badge off';b.textContent='DISARMED'}
@@ -180,7 +161,7 @@ async function ctrl(action){
 async function kill(){
   if(killStep===0){
     killStep=1;
-    document.getElementById('ctrl-msg').textContent='⚠ Click KILL again to confirm shutdown.';
+    document.getElementById('ctrl-msg').textContent='Click KILL again to confirm shutdown.';
     setTimeout(()=>{killStep=0;document.getElementById('ctrl-msg').textContent=''},6e3);
     return
   }
@@ -199,15 +180,11 @@ function showDash(){
 }
 function start(){poll();pollLogs();setInterval(poll,1500);setInterval(pollLogs,3000)}
 
-tok?( showDash(), start() ):showLogin()
+tok?(showDash(),start()):showLogin()
 </script>
 </body>
 </html>"""
 
-
-# ---------------------------------------------------------------------------
-# App factory
-# ---------------------------------------------------------------------------
 
 def create_web_app(shared: "AppSharedState", token: str) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None)
@@ -224,25 +201,17 @@ def create_web_app(shared: "AppSharedState", token: str) -> FastAPI:
     async def status() -> JSONResponse:
         return JSONResponse({
             "ts": time.time(),
-            "snipers": [
+            "targets": [
                 {
-                    "target": s.target,
-                    "state": s.state,
-                    "issued": s.issued,
-                    "distance": s.distance,
-                    "rate": s.rate,
-                    "lead": s.lead,
-                    "surf_msg_id": s.surf_msg_id,
-                    "surf_status": s.surf_status,
-                    "result_num": s.result_num,
+                    "target": t.target,
+                    "issue": t.issue,
+                    "zone": t.zone,
+                    "distance": max(0, t.target - t.issue),
+                    "surf_status": t.surf_status,
+                    "result_num": t.result_num,
                 }
-                for s in shared.snipers
+                for t in shared.targets
             ],
-            "upgrade_open": shared.upgrade_open,
-            "last_poll_at": shared.last_poll_at,
-            "star_balance": shared.star_balance,
-            "session_valid": shared.session_valid,
-            "rtt_ms": shared.rtt_ms,
             "armed": shared.armed,
         })
 
@@ -258,7 +227,7 @@ def create_web_app(shared: "AppSharedState", token: str) -> FastAPI:
     @app.post("/api/disarm", dependencies=[Depends(_verify)])
     async def disarm() -> JSONResponse:
         shared.armed = False
-        return JSONResponse({"ok": "Disarmed — bot will not fire even if trigger fires."})
+        return JSONResponse({"ok": "Disarmed."})
 
     @app.post("/api/kill", dependencies=[Depends(_verify)])
     async def kill() -> JSONResponse:
@@ -275,14 +244,13 @@ async def start_web_server(
     host: str = "127.0.0.1",
     port: int = 8080,
 ) -> asyncio.Task:
-    app = create_web_app(shared, token)
-    uvi_config = uvicorn.Config(
-        app=app,
+    web_app = create_web_app(shared, token)
+    cfg = uvicorn.Config(
+        app=web_app,
         host=host,
         port=port,
         log_level="warning",
         access_log=False,
     )
-    server = uvicorn.Server(uvi_config)
-    task = asyncio.create_task(server.serve(), name="web")
-    return task
+    server = uvicorn.Server(cfg)
+    return asyncio.create_task(server.serve(), name="web")
