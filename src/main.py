@@ -9,7 +9,6 @@ import sys
 from collections import deque
 
 import structlog
-import structlog.stdlib
 
 from src.config import load_config
 from src.shared import AppSharedState, TargetStatus
@@ -41,13 +40,12 @@ def _setup_logging(log_tail: deque) -> None:
 
     structlog.configure(
         processors=[
-            structlog.stdlib.add_log_level,
-            structlog.stdlib.add_logger_name,
+            structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             _tail_proc,
-            structlog.processors.JSONRenderer(),
+            structlog.dev.ConsoleRenderer(),
         ],
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,
