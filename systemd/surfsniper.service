@@ -1,0 +1,16 @@
+[Unit]
+Description=Surf gift sniper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=surf
+WorkingDirectory=/opt/surfsniper
+EnvironmentFile=/opt/surfsniper/.env
+ExecStart=/opt/surfsniper/.venv/bin/python -m src.main
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
