@@ -234,10 +234,16 @@ async def fire_prepaid(client: TelegramClient, msg_id: int) -> Any:
 
 
 async def fire_paid(client: TelegramClient, form: PaymentFormData) -> Any:
-    return await client(functions.payments.SendStarsFormRequest(
-        form_id=form.form_id,
-        invoice=form.invoice,
-    ))
+    try:
+        return await client(functions.payments.SendStarsFormRequest(
+            form_id=form.form_id,
+            invoice=form.invoice,
+        ))
+    except TypeError:
+        # Some TL layers omit the invoice param; fall back to form_id only
+        return await client(functions.payments.SendStarsFormRequest(
+            form_id=form.form_id,
+        ))
 
 
 # ---------------------------------------------------------------------------
@@ -247,26 +253,40 @@ async def fire_paid(client: TelegramClient, form: PaymentFormData) -> Any:
 def parse_num_from_updates(updates: Any) -> Optional[int]:
     """
     Walk the Updates object looking for messageActionStarGiftUnique.gift.num.
-    The server assigns num at upgrade time and includes it in the action.
+    Handles both bare Updates (upgradeStarGift path) and PaymentResult wrapper
+    (sendStarsForm path where .updates is an Updates object, not a list).
     """
     if updates is None:
         return None
 
-    for update in getattr(updates, "updates", []):
-        msg = getattr(update, "message", None)
-        if msg is None:
-            continue
-        action = getattr(msg, "action", None)
-        if action is None:
-            continue
-        gift = getattr(action, "gift", None)
-        if gift is None:
-            continue
-        num = getattr(gift, "num", None)
-        if num is not None:
-            return int(num)
+    try:
+        raw = getattr(updates, "updates", None)
+        if raw is not None and not isinstance(raw, list):
+            # PaymentResult path: .updates is an Updates object — unwrap one level
+            raw = getattr(raw, "updates", []) or []
+        elif raw is None:
+            raw = []
 
-    return None
+        for update in raw:
+            try:
+                msg = getattr(update, "message", None)
+                if msg is None:
+                    continue
+                action = getattr(msg, "action", None)
+                if action is None:
+                    continue
+                gift = getattr(action, "gift", None)
+                if gift is None:
+                    continue
+                num = getattr(gift, "num", None)
+                if num is not None:
+                    return int(num)
+            except Exception:
+                continue
+
+        return None
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +302,12 @@ async def get_star_balance(client: TelegramClient) -> Optional[int]:
         me = await client.get_me()
         peer = await client.get_input_entity(me)
         result = await client(functions.payments.GetStarsStatusRequest(peer=peer))
-        return getattr(result, "balance", None)
+        balance = getattr(result, "balance", None)
+        if balance is None:
+            return None
+        if hasattr(balance, "amount"):
+            return int(balance.amount)
+        return int(balance)
     except Exception:
         return None
 

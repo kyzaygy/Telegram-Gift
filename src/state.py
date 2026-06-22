@@ -59,6 +59,15 @@ class StateManager:
                     break
             await self._save()
 
+    async def unmark_fired(self, msg_id: int) -> None:
+        async with self._lock:
+            for surf in self._state.surfs:
+                if surf.msg_id == msg_id and surf.status == "fired":
+                    surf.status = "idle"
+                    surf.fired_at = None
+                    break
+            await self._save()
+
     async def mark_done(self, msg_id: int, result_num: int) -> None:
         async with self._lock:
             for surf in self._state.surfs:

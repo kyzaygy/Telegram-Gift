@@ -1,9 +1,9 @@
 """
 Diagnostic runner.  Usage:  python -m src.diagnostics
 
-Runs 13 checks and prints a PASS / FAIL / DEFERRED report.
+Runs 14 checks and prints a PASS / FAIL / DEFERRED report.
 Checks 1-7 are online (require a live Telegram session).
-Checks 8-13 are offline unit tests (no network, use synthetic data).
+Checks 8-14 are offline unit tests (no network, use synthetic data).
 """
 
 from __future__ import annotations
@@ -221,7 +221,7 @@ async def check_payment_form(client: Any, surfs: list) -> CheckResult:
 # ---------------------------------------------------------------------------
 
 def _make_updates(num: int) -> Any:
-    """Construct a fake Updates tree that parse_num_from_updates can read."""
+    """Construct a fake bare Updates tree (upgradeStarGift path)."""
     gift = SimpleNamespace(num=num)
     action = SimpleNamespace(gift=gift)
     msg = SimpleNamespace(action=action)
@@ -229,19 +229,36 @@ def _make_updates(num: int) -> Any:
     return SimpleNamespace(updates=[update])
 
 
+def _make_payment_result(num: int) -> Any:
+    """Construct a fake PaymentResult tree (sendStarsForm path).
+    .updates is an Updates object, not a list."""
+    gift = SimpleNamespace(num=num)
+    action = SimpleNamespace(gift=gift)
+    msg = SimpleNamespace(action=action)
+    update = SimpleNamespace(message=msg)
+    inner = SimpleNamespace(updates=[update])
+    return SimpleNamespace(updates=inner)
+
+
 def check_parse_num() -> CheckResult:
     try:
-        # Normal path: num present in Updates
+        # Bare Updates path (upgradeStarGift)
         ups = _make_updates(444)
         got = parse_num_from_updates(ups)
-        assert got == 444, f"expected 444 got {got}"
+        assert got == 444, f"bare Updates: expected 444 got {got}"
 
-        # Fallback path: no num in Updates → returns None (caller re-reads)
+        # PaymentResult path (sendStarsForm): .updates is an Updates object
+        pr = _make_payment_result(666)
+        got2 = parse_num_from_updates(pr)
+        assert got2 == 666, f"PaymentResult path: expected 666 got {got2}"
+
+        # Fallback path: no num → returns None (caller re-reads)
         empty_ups = SimpleNamespace(updates=[SimpleNamespace(message=SimpleNamespace(action=None))])
-        got2 = parse_num_from_updates(empty_ups)
-        assert got2 is None, f"expected None got {got2}"
+        got3 = parse_num_from_updates(empty_ups)
+        assert got3 is None, f"empty path: expected None got {got3}"
 
-        return _add(8, "parse_num (unit)", "PASS")
+        return _add(8, "parse_num (unit)", "PASS",
+                    detail="bare Updates + PaymentResult wrapper + empty path")
     except AssertionError as e:
         return _add(8, "parse_num (unit)", "FAIL", error=str(e))
     except Exception as e:
@@ -468,6 +485,38 @@ async def check_form_expiry() -> CheckResult:
         return _add(13, "form expiry (unit)", "FAIL", error=str(e))
 
 
+def check_tl_signatures() -> CheckResult:
+    """Introspect SendStarsFormRequest and GetPaymentFormRequest constructors."""
+    try:
+        import inspect
+        from telethon.tl import functions as tl_functions
+
+        send_cls = tl_functions.payments.SendStarsFormRequest
+        form_cls = tl_functions.payments.GetPaymentFormRequest
+
+        send_params = list(inspect.signature(send_cls.__init__).parameters.keys())[1:]
+        form_params = list(inspect.signature(form_cls.__init__).parameters.keys())[1:]
+
+        send_cid = hex(getattr(send_cls, "CONSTRUCTOR_ID", 0))
+        form_cid = hex(getattr(form_cls, "CONSTRUCTOR_ID", 0))
+
+        detail = (
+            f"SendStarsForm cid={send_cid} params={send_params}  |  "
+            f"GetPaymentForm cid={form_cid} params={form_params}"
+        )
+
+        if "invoice" not in send_params:
+            return _add(14, "TL form signatures", "DEFERRED",
+                        detail=detail + "  ← invoice absent; form_id-only fallback will be used")
+
+        return _add(14, "TL form signatures", "PASS", detail)
+    except AttributeError as e:
+        return _add(14, "TL form signatures", "FAIL",
+                    error=f"Class not found in TL layer: {e}")
+    except Exception as e:
+        return _add(14, "TL form signatures", "FAIL", error=str(e))
+
+
 # ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
@@ -565,13 +614,14 @@ async def run_diagnostics() -> None:
     print(f"  {_D}Unit tests (offline){_X}")
     print("  " + "─" * (_W - 2))
 
-    # 8-13 offline
+    # 8-14 offline
     check_parse_num()
     check_fc_timing()
     check_fc_edge_cases()
     await check_single_flight_persist()
     await check_flood_wait()
     await check_form_expiry()
+    check_tl_signatures()
 
     await client.disconnect()
 

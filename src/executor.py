@@ -93,6 +93,12 @@ async def execute_shot(
                 else:
                     raise
 
+            except TypeError as exc:
+                # Constructor signature mismatch — no RPC was sent, safe to roll back
+                log.error("send_stars_form_type_error", msg_id=msg_id, error=str(exc))
+                await state.unmark_fired(msg_id)
+                raise
+
             except RPCError as exc:
                 err = str(exc).upper()
                 if not is_prepaid and any(k in err for k in _FORM_STALE_HINTS):

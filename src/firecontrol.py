@@ -91,8 +91,8 @@ class FireController:
         """
         target = self._target.num
 
-        # ABORT: target num is already past — can never reach it.
-        if issued > target and self._state not in _TERMINAL:
+        # ABORT: target num is already issued — firing would give target+1, wasting the surf.
+        if issued >= target and self._state not in _TERMINAL:
             self._transition(SniperState.ABORTED)
             log.warning("target_past_abort", target=target, issued=issued)
 

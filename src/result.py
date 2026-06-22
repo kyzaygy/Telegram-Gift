@@ -26,7 +26,11 @@ async def process_result(
     num: Optional[int] = None
 
     if updates is not None:
-        num = parse_num_from_updates(updates)
+        try:
+            num = parse_num_from_updates(updates)
+        except Exception:
+            log.warning("parse_num_error_fallback", msg_id=msg_id)
+            num = None
 
     if num is None:
         log.info("num_not_in_updates_fallback_read", msg_id=msg_id)
