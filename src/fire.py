@@ -2,8 +2,8 @@
 Final-check → payment-form → payment → result.
 
 Only fires when current_issue() == target_num - 1 exactly.
-If the issue has already reached or passed the target, returns None immediately
-(caller marks surf as aborted — the surf is NOT consumed).
+mark_fired is written ONLY after the server confirms the payment (not before),
+so a client-side TypeError never strands the surf as "fired-but-not-upgraded".
 """
 
 from __future__ import annotations
@@ -24,14 +24,18 @@ log = structlog.get_logger(__name__)
 def _parse_num(result: object) -> Optional[int]:
     """
     Extract the assigned num from payments.PaymentResult.
-    PaymentResult.updates is an Updates object (not a list); its .updates list
-    contains service messages with messageActionStarGiftUnique.gift.num.
+    PaymentResult.updates is an Updates object; its .updates list contains
+    a service message with messageActionStarGiftUnique.gift.num.
+    Accepts both PaymentResult and bare Updates. Never raises.
     """
     try:
         outer = getattr(result, "updates", None)
         if outer is None:
             return None
         updates_list = getattr(outer, "updates", None)
+        if not isinstance(updates_list, list):
+            # bare Updates passed directly
+            updates_list = getattr(result, "updates", None) if isinstance(getattr(result, "updates", None), list) else None
         if not isinstance(updates_list, list):
             return None
         for upd in updates_list:
@@ -55,6 +59,19 @@ def _parse_num(result: object) -> Optional[int]:
         return None
 
 
+async def fetch_payment_form(
+    app: Client, msg_id: int
+) -> tuple[int, object]:
+    """Fetch payment form; returns (form_id, invoice) for use with fire()."""
+    stargift = types.InputSavedStarGiftUser(msg_id=msg_id)
+    invoice = types.InputInvoiceStarGiftUpgrade(
+        stargift=stargift,
+        keep_original_details=False,
+    )
+    form = await app.invoke(functions.payments.GetPaymentForm(invoice=invoice))
+    return form.form_id, invoice
+
+
 async def fire(
     app: Client,
     msg_id: int,
@@ -63,18 +80,19 @@ async def fire(
     hole_tolerance: int,
     state: StateManager,
     armed: bool,
+    prefetched_form_id: Optional[int] = None,
+    prefetched_invoice: Optional[object] = None,
 ) -> Optional[int]:
     """
-    Perform a fresh HTTP probe, fetch the payment form, and send the upgrade.
+    Perform a fresh HTTP probe, then send the upgrade.
     Returns the assigned collectible num, or None if aborted / not ready / disarmed.
     """
-    # Fresh final check before committing
     issue = await current_issue(stem, hole_tolerance)
     log.info("final_check", target=target_num, issue=issue, msg_id=msg_id)
 
     if issue >= target_num:
         log.warning("final_check_overshoot", target=target_num, issue=issue)
-        return None  # caller detects overshoot on next watcher iteration
+        return None
 
     if issue != target_num - 1:
         log.info("final_check_not_ready", target=target_num, issue=issue)
@@ -84,22 +102,16 @@ async def fire(
         log.info("final_check_disarmed", target=target_num)
         return None
 
-    # Build invoice for this surf
-    stargift = types.InputSavedStarGiftUser(msg_id=msg_id)
-    invoice = types.InputInvoiceStarGiftUpgrade(
-        stargift=stargift,
-        keep_original_details=False,
-    )
+    # Use pre-fetched form if available; otherwise fetch now
+    if prefetched_form_id is not None and prefetched_invoice is not None:
+        form_id = prefetched_form_id
+        invoice = prefetched_invoice
+        log.debug("using_prefetched_form", form_id=form_id, msg_id=msg_id)
+    else:
+        form_id, invoice = await fetch_payment_form(app, msg_id)
+        log.info("payment_form_fetched", form_id=form_id, msg_id=msg_id)
 
-    # Fetch payment form (must be fresh — forms expire in ~45 s)
-    form_result = await app.invoke(
-        functions.payments.GetPaymentForm(invoice=invoice)
-    )
-    form_id = form_result.form_id
-    log.info("payment_form_fetched", form_id=form_id, msg_id=msg_id)
-
-    # Mark fired before the RPC so a process crash doesn't double-fire on restart
-    await state.mark_fired(msg_id)
+    # Send payment — mark_fired ONLY after server confirms
     try:
         try:
             result = await app.invoke(
@@ -111,9 +123,11 @@ async def fire(
                 functions.payments.SendStarsForm(form_id=form_id)
             )
     except Exception:
-        # No payment confirmed — roll back so the surf isn't stranded as "fired"
-        await state.unmark_fired(msg_id)
+        # Request did not reach the server (or server rejected) — surf untouched
         raise
+
+    # Server confirmed — now safe to persist state
+    await state.mark_fired(msg_id)
 
     num = _parse_num(result)
     if num is None:

@@ -5,6 +5,7 @@ Entry point. Starts two watcher tasks (one per target) and an optional web dashb
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from collections import deque
 
@@ -38,17 +39,16 @@ def _setup_logging(log_tail: deque) -> None:
             pass
         return event_dict
 
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     structlog.configure(
         processors=[
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
             _tail_proc,
             structlog.dev.ConsoleRenderer(),
         ],
         logger_factory=structlog.PrintLoggerFactory(),
-        cache_logger_on_first_use=True,
     )
 
 
@@ -58,6 +58,14 @@ async def _main() -> None:
 
     config = load_config("targets.yaml")
 
+    if not config.model.slug_stem:
+        log.error("config_missing_slug_stem")
+        sys.exit(1)
+
+    if config.model.gift_id == 0:
+        log.error("gift_id_not_set — check targets.yaml model.gift_id")
+        sys.exit(1)
+
     log.info(
         "surfsniper_start",
         armed=config.runtime.armed,
@@ -65,10 +73,6 @@ async def _main() -> None:
         slug_stem=config.model.slug_stem,
         gift_id=config.model.gift_id,
     )
-
-    if not config.model.slug_stem:
-        log.error("config_missing_slug_stem")
-        sys.exit(1)
 
     shared = AppSharedState(
         targets=[TargetStatus(target=t.num) for t in config.targets],
@@ -79,7 +83,11 @@ async def _main() -> None:
     state = StateManager()
     await state.load()
 
-    app = await create_client(config)
+    try:
+        app = await create_client(config)
+    except RuntimeError as exc:
+        log.error("client_start_failed", error=str(exc))
+        sys.exit(1)
 
     msg_ids = await get_msg_ids(app, config.model.gift_id)
     if len(msg_ids) < len(config.targets):

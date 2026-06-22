@@ -1,10 +1,11 @@
 """
 Kurigram (pyrogram) client and gift helpers.
-Session file: <TG_SESSION>.session  (created by first-login script)
+Session file: <TG_SESSION>.session  (created by python -m src.login)
 """
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 import structlog
@@ -17,6 +18,13 @@ log = structlog.get_logger(__name__)
 
 
 async def create_client(config: AppConfig) -> Client:
+    session_file = f"{config.env.tg_session}.session"
+    if not os.path.exists(session_file):
+        raise RuntimeError(
+            f"Session file not found: {session_file}\n"
+            "Create it first: python -m src.login"
+        )
+
     app = Client(
         name=config.env.tg_session,
         api_id=config.env.tg_api_id,
@@ -30,10 +38,7 @@ async def create_client(config: AppConfig) -> Client:
 
 
 async def get_msg_ids(app: Client, gift_id: int) -> list[int]:
-    """
-    Return msg_ids of saved gifts with can_upgrade=True and matching gift_id,
-    in the order Telegram returns them (index 0 = ammo_index 0).
-    """
+    """Return msg_ids of saved surfs with can_upgrade=True and matching gift_id."""
     peer = await app.resolve_peer("me")
     result = await app.invoke(
         functions.payments.GetSavedStarGifts(
@@ -60,7 +65,7 @@ async def get_msg_ids(app: Client, gift_id: int) -> list[int]:
 
 
 async def read_gift_num(app: Client, msg_id: int) -> Optional[int]:
-    """Fallback: re-fetch saved gifts and return num of the upgraded gift."""
+    """Fallback: re-fetch saved gifts and return num of the upgraded surf."""
     peer = await app.resolve_peer("me")
     result = await app.invoke(
         functions.payments.GetSavedStarGifts(

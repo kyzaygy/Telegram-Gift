@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=surf
+User=root
 WorkingDirectory=/opt/surfsniper
 EnvironmentFile=/opt/surfsniper/.env
 ExecStart=/opt/surfsniper/.venv/bin/python -m src.main

@@ -1,9 +1,21 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 import yaml
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_log = logging.getLogger(__name__)
+
+_KNOWN_SECTIONS: set[str] = {"model", "probe", "intervals", "zones", "targets", "runtime"}
+_KNOWN_FIELDS: dict[str, set[str]] = {
+    "model":     {"slug_stem", "gift_id", "example_slug"},
+    "probe":     {"hole_tolerance"},
+    "intervals": {"coarse_sec", "mid_sec", "tight_sec"},
+    "zones":     {"mid_at", "tight_lead"},
+    "runtime":   {"armed"},
+}
 
 
 class EnvSettings(BaseSettings):
@@ -26,6 +38,7 @@ class EnvSettings(BaseSettings):
 class ModelConfig:
     slug_stem: str = ""
     gift_id: int = 0
+    example_slug: str = ""
 
 
 @dataclass
@@ -37,13 +50,13 @@ class ProbeConfig:
 class IntervalConfig:
     coarse_sec: float = 60.0
     mid_sec: float = 10.0
-    tight_sec: float = 1.5
+    tight_sec: float = 0.3
 
 
 @dataclass
 class ZoneConfig:
     mid_at: int = 400
-    tight_lead: int = 4
+    tight_lead: int = 44
 
 
 @dataclass
@@ -68,16 +81,34 @@ class AppConfig:
     runtime: RuntimeConfig
 
 
+def _check_unknown(raw: dict) -> None:
+    for section in raw:
+        if section == "targets":
+            continue
+        if section not in _KNOWN_SECTIONS:
+            _log.warning("config_unknown_section section=%s", section)
+            continue
+        known = _KNOWN_FIELDS.get(section, set())
+        section_data = raw[section]
+        if isinstance(section_data, dict):
+            for field in section_data:
+                if field not in known:
+                    _log.warning("config_unknown_field section=%s field=%s", section, field)
+
+
 def load_config(path: str = "targets.yaml") -> AppConfig:
     env = EnvSettings()
 
     with open(path) as f:
-        raw = yaml.safe_load(f)
+        raw = yaml.safe_load(f) or {}
+
+    _check_unknown(raw)
 
     m = raw.get("model", {})
     model = ModelConfig(
         slug_stem=m.get("slug_stem", ""),
         gift_id=int(m.get("gift_id", 0)),
+        example_slug=m.get("example_slug", ""),
     )
 
     p = raw.get("probe", {})
@@ -87,19 +118,25 @@ def load_config(path: str = "targets.yaml") -> AppConfig:
     intervals = IntervalConfig(
         coarse_sec=float(iv.get("coarse_sec", 60.0)),
         mid_sec=float(iv.get("mid_sec", 10.0)),
-        tight_sec=float(iv.get("tight_sec", 1.5)),
+        tight_sec=float(iv.get("tight_sec", 0.3)),
     )
 
     z = raw.get("zones", {})
     zones = ZoneConfig(
         mid_at=int(z.get("mid_at", 400)),
-        tight_lead=int(z.get("tight_lead", 4)),
+        tight_lead=int(z.get("tight_lead", 44)),
     )
 
     targets = [TargetConfig(**t) for t in raw.get("targets", [])]
 
     r = raw.get("runtime", {})
     runtime = RuntimeConfig(armed=bool(r.get("armed", False)))
+
+    _log.info(
+        "config_loaded  coarse=%.0f mid=%.0f tight=%.3f mid_at=%d tight_lead=%d gift_id=%d armed=%s",
+        intervals.coarse_sec, intervals.mid_sec, intervals.tight_sec,
+        zones.mid_at, zones.tight_lead, model.gift_id, runtime.armed,
+    )
 
     return AppConfig(
         env=env,

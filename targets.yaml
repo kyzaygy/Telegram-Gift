@@ -1,18 +1,19 @@
 model:
   slug_stem: "SurgeBoard"
   gift_id: 5832497899283415733
+  example_slug: "SurgeBoard-1"
 
 probe:
-  hole_tolerance: 5          # consecutive missing slugs that mark the ceiling
+  hole_tolerance: 5
 
 intervals:
   coarse_sec: 60
   mid_sec: 10
-  tight_sec: 1.5
+  tight_sec: 0.3
 
 zones:
-  mid_at: 400                # issue >= mid_at → mid_sec polling
-  tight_lead: 4              # issue >= target - tight_lead → tight_sec polling
+  mid_at: 400
+  tight_lead: 44      # tight activates 44 issues before target (issue >= target - 44)
 
 targets:
   - num: 444
@@ -21,4 +22,4 @@ targets:
     ammo_index: 1
 
 runtime:
-  armed: false               # set to true only when ready to fire (or ARM via dashboard)
+  armed: false        # live upgrade only when true (or ARM via dashboard)

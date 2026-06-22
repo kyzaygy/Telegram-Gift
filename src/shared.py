@@ -9,7 +9,8 @@ from typing import Optional
 class TargetStatus:
     target: int
     issue: int = 0
-    zone: str = "coarse"          # coarse | mid | tight
+    zone: str = "coarse"           # coarse | mid | tight
+    interval: float = 60.0
     surf_status: str = "watching"  # watching | done | aborted
     result_num: Optional[int] = None
 
@@ -26,6 +27,7 @@ class AppSharedState:
         target_num: int,
         issue: Optional[int] = None,
         zone: Optional[str] = None,
+        interval: Optional[float] = None,
         surf_status: Optional[str] = None,
         result_num: Optional[int] = None,
     ) -> None:
@@ -35,6 +37,8 @@ class AppSharedState:
                     t.issue = issue
                 if zone is not None:
                     t.zone = zone
+                if interval is not None:
+                    t.interval = interval
                 if surf_status is not None:
                     t.surf_status = surf_status
                 if result_num is not None:

@@ -2,25 +2,28 @@
 Adaptive-polling watcher for one sniper target.
 
 Poll interval by zone:
-  coarse  issue < mid_at                  → coarse_sec (60 s)
-  mid     mid_at ≤ issue < target-tight_lead → mid_sec  (10 s)
-  tight   issue ≥ target - tight_lead     → tight_sec (1.5 s)
+  coarse  issue < mid_at                       → coarse_sec (60 s)
+  mid     mid_at <= issue < target-tight_lead  → mid_sec  (10 s)
+  tight   issue >= target - tight_lead         → tight_sec (0.3 s)
+
+In tight zone the payment form is prefetched and refreshed every 30 s so that
+the actual fire() call only needs to send SendStarsForm.
 
 Fire condition: issue == target - 1 AND armed == True.
-After fire() the watcher exits; if the issue overshoots the target the surf
-is aborted (not consumed) and the watcher exits.
+Overshoot (issue >= target) → surf marked aborted, watcher exits.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, Optional
 
 import structlog
 from pyrogram import Client
 
 from src.config import AppConfig, TargetConfig
-from src.fire import fire
+from src.fire import fetch_payment_form, fire
 from src.issued_probe import current_issue
 from src.state import StateManager
 
@@ -28,6 +31,8 @@ if TYPE_CHECKING:
     from src.shared import AppSharedState
 
 log = structlog.get_logger(__name__)
+
+_FORM_TTL = 30.0  # refresh prefetched form after this many seconds
 
 
 def _zone(issue: int, target: int, config: AppConfig) -> str:
@@ -54,6 +59,10 @@ async def watch_target(
 ) -> None:
     log.info("watcher_start", target=target.num, msg_id=msg_id)
 
+    prefetched_form_id: Optional[int] = None
+    prefetched_invoice: Optional[object] = None
+    form_fetched_at: float = 0.0
+
     while not shared.kill_requested:
         if state.is_surf_used(msg_id):
             log.info("watcher_surf_done_on_start", msg_id=msg_id, target=target.num)
@@ -69,7 +78,7 @@ async def watch_target(
         distance = target.num - issue
         zone = _zone(issue, target.num, config)
         interval = _interval(zone, config)
-        shared.update_target(target.num, issue=issue, zone=zone)
+        shared.update_target(target.num, issue=issue, zone=zone, interval=interval)
 
         log.info(
             "tick",
@@ -81,11 +90,27 @@ async def watch_target(
             armed=shared.armed,
         )
 
+        # Prefetch payment form in tight zone; refresh when stale
+        if zone == "tight":
+            now = time.monotonic()
+            if prefetched_form_id is None or now - form_fetched_at > _FORM_TTL:
+                try:
+                    prefetched_form_id, prefetched_invoice = await fetch_payment_form(app, msg_id)
+                    form_fetched_at = now
+                    log.debug("form_prefetched", form_id=prefetched_form_id, target=target.num)
+                except Exception as exc:
+                    log.warning("form_prefetch_error", error=str(exc), target=target.num)
+                    prefetched_form_id = None
+        else:
+            # Outside tight zone: clear any stale prefetch
+            prefetched_form_id = None
+            prefetched_invoice = None
+
         # Overshoot: target already issued — abort without spending the surf
         if issue >= target.num:
             log.warning("abort_target_passed", target=target.num, issue=issue)
             await state.mark_aborted(msg_id)
-            shared.update_target(target.num, issue=issue, surf_status="aborted")
+            shared.update_target(target.num, surf_status="aborted")
             break
 
         # Trigger condition
@@ -103,6 +128,8 @@ async def watch_target(
                         hole_tolerance=config.probe.hole_tolerance,
                         state=state,
                         armed=shared.armed,
+                        prefetched_form_id=prefetched_form_id,
+                        prefetched_invoice=prefetched_invoice,
                     )
                 except Exception as exc:
                     log.error("fire_error", error=str(exc), target=target.num, msg_id=msg_id)
@@ -111,11 +138,9 @@ async def watch_target(
 
                 if num is not None:
                     shared.update_target(
-                        target.num, issue=issue, surf_status="done", result_num=num
+                        target.num, surf_status="done", result_num=num
                     )
                     break
-                # fire() returned None: final check may have seen overshoot or disarmed
-                # next loop iteration re-probes and handles abort if needed
 
         await asyncio.sleep(interval)
 

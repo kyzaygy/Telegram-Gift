@@ -30,7 +30,7 @@ _HTML = """<!DOCTYPE html>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'SF Mono','Fira Code',monospace;background:#0d1117;color:#e6edf3;font-size:13px;line-height:1.6}
-.wrap{max-width:820px;margin:0 auto;padding:16px}
+.wrap{max-width:860px;margin:0 auto;padding:16px}
 h1{font-size:17px;color:#58a6ff;margin-bottom:14px;display:flex;align-items:center;gap:10px}
 .card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px;margin-bottom:12px}
 .card h2{font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px}
@@ -95,7 +95,7 @@ input[type=password]{background:#0d1117;border:1px solid #30363d;border-radius:6
 </div>
 </div>
 <script>
-let tok=localStorage.getItem('st')||'';
+let tok=sessionStorage.getItem('st')||'';
 let killStep=0;
 function hdr(){return{'Authorization':'Bearer '+tok}}
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
@@ -104,7 +104,7 @@ async function auth(){
   tok=document.getElementById('tok').value.trim();
   const r=await fetch('/api/status',{headers:hdr()});
   if(r.status===401){document.getElementById('lerr').textContent='Invalid token';return}
-  localStorage.setItem('st',tok);
+  sessionStorage.setItem('st',tok);
   showDash();start()
 }
 
@@ -128,16 +128,18 @@ async function pollLogs(){
 }
 
 function render(d){
-  let h='<table><tr><th>Target</th><th>Issue</th><th>Dist</th><th>Zone</th><th>Surf</th><th>Result</th></tr>';
+  let h='<table><tr><th>Target</th><th>Issue</th><th>Dist</th><th>Zone</th><th>Interval</th><th>Surf</th><th>Result</th></tr>';
   for(const t of d.targets){
     const res=t.result_num!==null
       ?(t.result_num===t.target?'<span class="hit">#'+t.result_num+' HIT</span>':'<span class="miss">#'+t.result_num+' MISS</span>')
       :'—';
+    const iv=t.interval>=1?t.interval.toFixed(0)+'s':t.interval.toFixed(2)+'s';
     h+=`<tr>
       <td>#${t.target}</td>
       <td>${t.issue}</td>
       <td>${t.distance}</td>
       <td class="${t.zone}">${t.zone}</td>
+      <td class="${t.zone}">${iv}</td>
       <td class="${t.surf_status}">${t.surf_status}</td>
       <td>${res}</td>
     </tr>`;
@@ -207,6 +209,7 @@ def create_web_app(shared: "AppSharedState", token: str) -> FastAPI:
                     "issue": t.issue,
                     "zone": t.zone,
                     "distance": max(0, t.target - t.issue),
+                    "interval": t.interval,
                     "surf_status": t.surf_status,
                     "result_num": t.result_num,
                 }
